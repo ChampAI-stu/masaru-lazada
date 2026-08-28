@@ -60,6 +60,16 @@ const normOwner = v => {
 };
 const isExcludedOwner = v => EXCLUDE_OWNERS.includes(normOwner(v));
 
+/* ชื่อร้านในไฟล์ค่าแอดมีต่อท้ายประเภทแอด เช่น
+   "MASARU_STORE TH - Sponsored Max" -> "MASARU_STORE TH"
+   ตัดเฉพาะรูปแบบ " - " (เว้นวรรค-ขีด-เว้นวรรค) เพื่อไม่ไปโดนชื่อร้านที่มีขีดติดกัน */
+function normStore(v){
+  let s = clean(v);
+  if (!s) return s;
+  s = s.split(/\s+[-–—]\s+/)[0];
+  return s.replace(/\s*\((sponsored|discovery|affiliate|search|max)[^)]*\)\s*$/i, '').trim();
+}
+
 /* ชื่อคอลัมน์ที่ยอมรับ (เผื่อไฟล์เดือนใหม่พิมพ์ต่างไปเล็กน้อย) */
 const COL_SALES = {
   plat:  ['แพลตฟอร์ม', 'platform'],
@@ -217,8 +227,8 @@ function parseExpense(wb, sheetNames){
       if (/shopee|tiktok/i.test(cat)) continue;
       const owner = normOwner(row[ix.owner]);
       if (isExcludedOwner(owner)){ dropped++; continue; }
-      const store = clean(row[ix.store]) || (ix.order >= 0 ? clean(row[ix.order]) : '');
-      const base = ['E', iso, cat, store, amt].join('|');
+      const store = normStore(row[ix.store]) || (ix.order >= 0 ? clean(row[ix.order]) : '');
+      const base = ['E', iso, cat, store, amt, r].join('|');
       const c = (seen.get(base) || 0) + 1; seen.set(base, c);
       rows.push({
         id: hashKey(base + '#' + c), pay_date: iso, category: cat,
