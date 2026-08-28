@@ -70,7 +70,9 @@ async function renderImport(){
 async function addFiles(files){
   for (const f of files){
     try {
-      const wb = XLSX.read(await f.arrayBuffer(), { cellDates:true });
+      /* cellDates:false — ให้ได้ serial ดิบ แล้วแปลงเองด้วย XLSX.SSF
+         ถ้าปล่อยให้ SheetJS แปลงเป็น Date วันที่จะเลื่อนตามโซนเวลาของเครื่อง */
+      const wb = XLSX.read(await f.arrayBuffer(), { cellDates:false });
       const kind = guessKind(wb);
       PICKED.push({ file:f, wb, kind, sheets: suggestSheets(wb, kind) });
     } catch (e) { toast(`${f.name}: อ่านไฟล์ไม่ได้`, 'err'); }
