@@ -12,11 +12,15 @@
 </head>
 <body>
 <script>
+/* เทียบชื่อร้านข้ามไฟล์ (ตัดช่องว่างและตัวพิมพ์) */
+const skey = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+
 async function renderExpense(){
   const r = filterRange();
-  const [exp, mon] = await Promise.all([
+  const [exp, mon, storeSales] = await Promise.all([
     SB.selectCached('lz_expense', `select=*&pay_date=gte.${r.from}&pay_date=lte.${r.to}&order=pay_date.desc`),
-    SB.rpcCached('f_sales_monthly', rpcArgs(r))
+    SB.rpcCached('f_sales_monthly', rpcArgs(r)),
+    SB.rpcCached('f_sales_store',   rpcArgs(r))
   ]);
   if (!exp.length){
     $('#view').innerHTML = emptyState('ยังไม่มีข้อมูลค่าใช้จ่าย',
@@ -27,24 +31,62 @@ async function renderExpense(){
   const sales = mon.reduce((s,x) => s + +x.amount, 0);
   const ratio = sales ? total / sales * 100 : 0;
 
+  /* ---------- ประสิทธิภาพค่าแอดรายร้าน ---------- */
+  const salesByStore = {};
+  storeSales.forEach(s => salesByStore[skey(s.store)] = +s.amount);
+
+  const adMap = {};
+  exp.filter(x => /ads/i.test(x.category || '')).forEach(x => {
+    const k = skey(x.store);
+    const o = adMap[k] || (adMap[k] = { store: x.store || 'ไม่ระบุ', owner: x.owner || '', ads:0, adSales:0, n:0 });
+    o.ads += +x.amount || 0;
+    o.adSales += +x.ad_sales || 0;
+    o.n++;
+    if (!o.owner && x.owner) o.owner = x.owner;
+  });
+  const adRows = [];
+  for (const k in adMap){
+    const o = adMap[k];
+    o.shopSales = salesByStore[k] || 0;
+    o.acos   = o.adSales   ? o.ads / o.adSales * 100 : null;      // ค่าแอด ÷ ยอดขายจากแอด
+    o.share  = o.shopSales ? o.ads / o.shopSales * 100 : null;    // ค่าแอด ÷ ยอดขายรวมของร้าน
+    o.fromAd = o.shopSales ? o.adSales / o.shopSales * 100 : null;
+    o.roas   = o.ads ? o.adSales / o.ads : null;
+    adRows.push(o);
+  }
+  adRows.sort((a,b) => b.ads - a.ads);
+
+  const adsTotal     = adRows.reduce((s,x) => s + x.ads, 0);
+  const adSalesTotal = adRows.reduce((s,x) => s + x.adSales, 0);
+  const acosTotal    = adSalesTotal ? adsTotal / adSalesTotal * 100 : null;
+  const hasAdSales   = adSalesTotal > 0;
+
+  /* ---------- รายเดือน / หมวด ---------- */
   const byCat = {}; exp.forEach(x => byCat[x.category] = (byCat[x.category] || 0) + +x.amount);
   const cats = Object.keys(byCat).sort((a,b) => byCat[b] - byCat[a]);
-
-  const byMon = {}; exp.forEach(x => { const m = mOf(x.pay_date); byMon[m] = (byMon[m] || 0) + +x.amount; });
+  const byMon = {}, adSalesMon = {};
+  exp.forEach(x => { const m = mOf(x.pay_date);
+    byMon[m] = (byMon[m] || 0) + +x.amount;
+    adSalesMon[m] = (adSalesMon[m] || 0) + (+x.ad_sales || 0); });
   const salesMon = {}; mon.forEach(x => salesMon[+x.ym.slice(5)] = +x.amount);
 
   const monthRows = Array.from({length:12}, (_, i) => i + 1)
     .filter(m => byMon[m] || salesMon[m])
-    .map(m => ({ m, exp: byMon[m] || 0, sales: salesMon[m] || 0,
+    .map(m => ({ m, exp: byMon[m] || 0, sales: salesMon[m] || 0, adSales: adSalesMon[m] || 0,
                  ratio: salesMon[m] ? (byMon[m] || 0) / salesMon[m] * 100 : 0,
+                 acos: adSalesMon[m] ? (byMon[m] || 0) / adSalesMon[m] * 100 : null,
                  net: (salesMon[m] || 0) - (byMon[m] || 0) }));
 
   $('#view').innerHTML = `
     <div class="kpis">
       ${kpi('ค่าใช้จ่ายรวม', money(total), `${num(exp.length)} รายการ`, 'r')}
-      ${kpi('ยอดขายในช่วงเดียวกัน', money(sales), '', 'o')}
-      ${kpi('สัดส่วนค่าใช้จ่าย', ratio.toFixed(2) + '%', 'ของยอดขาย', ratio > 15 ? 'r' : 'ok')}
-      ${kpi('หมวดที่ใช้มากที่สุด', esc(cats[0]), money(byCat[cats[0]]), 'g')}
+      ${kpi('ยอดขายที่ได้จากแอด', hasAdSales ? money(adSalesTotal) : '—',
+            hasAdSales ? `คิดเป็น ${sales ? (adSalesTotal/sales*100).toFixed(1) : 0}% ของยอดขายรวม`
+                       : 'ไฟล์ค่าแอดยังไม่มีคอลัมน์ "ยอดขาย"', 'o')}
+      ${kpi('ค่าแอด ÷ ยอดขายจากแอด', acosTotal === null ? '—' : acosTotal.toFixed(2) + '%',
+            hasAdSales ? `ยิงแอด ${money(adsTotal)} ได้ยอด ${money(adSalesTotal)}` : '',
+            acosTotal !== null && acosTotal <= 10 ? 'ok' : 'g')}
+      ${kpi('ค่าใช้จ่าย ÷ ยอดขายรวม', ratio.toFixed(2) + '%', `ยอดขาย ${money(sales)}`, ratio > 15 ? 'r' : 'ok')}
     </div>
 
     <div class="grid2">
@@ -58,11 +100,41 @@ async function renderExpense(){
       </div>
     </div>
 
+    ${adRows.length ? `
+    <div class="panel">
+      <div class="panel-h"><h3>ค่าแอดคิดเป็นกี่ % ของยอดขายแต่ละร้าน</h3>
+        <span class="hint">แท่งส้ม = ค่าแอด · แท่งน้ำเงิน = ยอดขายจากแอด · เส้นแดง = % ค่าแอด</span></div>
+      <div class="panel-b"><div class="chartbox lg"><canvas id="cAd"></canvas></div></div>
+    </div>
+
+    ${renderTable([
+      { t:'#', k:'x', fmt: (r, i) => `<span class="rank">${i+1}</span>` },
+      { t:'ร้านค้า', k:'store' },
+      { t:'ผู้ดูแล', k:'owner' },
+      { t:'ค่าแอด', num:1, bar:1, sum:1, raw: r => r.ads, fmt: r => money(r.ads) },
+      { t:'ยอดขายจากแอด', num:1, sum:1, raw: r => r.adSales, fmt: r => r.adSales ? money(r.adSales) : '—' },
+      { t:'ค่าแอด ÷ ยอดจากแอด', num:1, raw: r => r.acos ?? 9e9,
+        fmt: r => r.acos === null ? '—'
+          : `<span class="${r.acos <= 10 ? 'up' : r.acos <= 20 ? '' : 'down'}">${r.acos.toFixed(2)}%</span>` },
+      { t:'ยอดขายรวมของร้าน', num:1, sum:1, raw: r => r.shopSales, fmt: r => r.shopSales ? money(r.shopSales) : '—' },
+      { t:'ค่าแอด ÷ ยอดรวมร้าน', num:1, raw: r => r.share ?? 9e9,
+        fmt: r => r.share === null ? '<span style="color:var(--muted)">ไม่มียอดขายในระบบ</span>'
+          : `<span class="${r.share <= 10 ? 'up' : r.share <= 20 ? '' : 'down'}">${r.share.toFixed(2)}%</span>` },
+      { t:'% ยอดร้านที่มาจากแอด', num:1, raw: r => r.fromAd ?? -1,
+        fmt: r => r.fromAd === null ? '—' : r.fromAd.toFixed(1) + '%' },
+      { t:'ROAS', num:1, raw: r => r.roas ?? -1, fmt: r => r.roas === null ? '—' : r.roas.toFixed(2) + 'x' }
+    ], adRows, { title:'ประสิทธิภาพค่าแอดรายร้าน', sort:3, total:true, search:true,
+        hint:'ROAS = ยอดขายจากแอด ÷ ค่าแอด (ยิ่งสูงยิ่งคุ้ม)',
+        download:'ประสิทธิภาพค่าแอดรายร้าน_Lazada' })}` : ''}
+
     ${renderTable([
       { t:'เดือน', k:'m', fmt: r => TH_MONTH[r.m] },
       { t:'ยอดขาย', num:1, sum:1, raw: r => r.sales, fmt: r => money(r.sales) },
+      { t:'ยอดขายจากแอด', num:1, sum:1, raw: r => r.adSales, fmt: r => r.adSales ? money(r.adSales) : '—' },
       { t:'ค่าใช้จ่าย', num:1, bar:1, sum:1, raw: r => r.exp, fmt: r => money(r.exp) },
-      { t:'% ต่อยอดขาย', num:1, raw: r => r.ratio,
+      { t:'ค่าแอด ÷ ยอดจากแอด', num:1, raw: r => r.acos ?? 9e9,
+        fmt: r => r.acos === null ? '—' : `<span class="${r.acos <= 10 ? 'up' : 'down'}">${r.acos.toFixed(2)}%</span>` },
+      { t:'ค่าใช้จ่าย ÷ ยอดขาย', num:1, raw: r => r.ratio,
         fmt: r => `<span class="${r.ratio > 15 ? 'down' : 'up'}">${r.ratio.toFixed(2)}%</span>` },
       { t:'คงเหลือ', num:1, sum:1, raw: r => r.net, fmt: r => money(r.net) }
     ], monthRows, { title:'สรุปรายเดือน', sort:0, dir:'asc', total:true, download:'ค่าใช้จ่ายรายเดือน_Lazada' })}
@@ -79,7 +151,13 @@ async function renderExpense(){
       { t:'หมวด', k:'category' },
       { t:'ร้าน / รายละเอียด', k:'store' },
       { t:'ผู้ดูแล', k:'owner' },
-      { t:'จำนวนเงิน', num:1, bar:1, sum:1, raw: r => +r.amount, fmt: r => money2(r.amount) }
+      { t:'ยอดก่อนภาษี', num:1, sum:1, raw: r => +r.base_amount || 0,
+        fmt: r => r.base_amount ? money2(r.base_amount) : '—' },
+      { t:'ภาษี 7%', num:1, sum:1, raw: r => +r.vat || 0, fmt: r => r.vat ? money2(r.vat) : '—' },
+      { t:'รวมจ่าย', num:1, bar:1, sum:1, raw: r => +r.amount, fmt: r => money2(r.amount) },
+      { t:'ยอดขายจากแอด', num:1, sum:1, raw: r => +r.ad_sales || 0,
+        fmt: r => r.ad_sales ? money(r.ad_sales) : '—' },
+      { t:'สถานะ', k:'status', fmt: r => r.status ? `<span class="chip b">${esc(r.status)}</span>` : '' }
     ], exp, { title:'รายการทั้งหมด', sort:0, search:true, total:true, download:'ค่าใช้จ่าย_Lazada' })}`;
 
   paintTables();
@@ -100,6 +178,27 @@ async function renderExpense(){
         y1:{ position:'right', beginAtZero:true, grid:{ display:false }, ticks:{ callback: v => v + '%' } } } }
   });
   chart('cCat', doughnutCfg(cats, cats.map(c => byCat[c])));
+
+  if (adRows.length){
+    const top = adRows.slice(0, 12);
+    chart('cAd', {
+      type:'bar',
+      data:{ labels: top.map(x => x.store), datasets:[
+        { label:'ค่าแอด', data: top.map(x => x.ads), backgroundColor:C.orange, borderRadius:5 },
+        { label:'ยอดขายจากแอด', data: top.map(x => x.adSales), backgroundColor:C.navy, borderRadius:5 },
+        { label:'ค่าแอด ÷ ยอดจากแอด (%)', type:'line', yAxisID:'y1',
+          data: top.map(x => x.acos === null ? null : +x.acos.toFixed(2)),
+          borderColor:C.red, borderWidth:2, pointRadius:3, tension:.3 }
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12 } },
+          tooltip:{ callbacks:{ label: c => c.dataset.yAxisID === 'y1'
+            ? ` ${c.dataset.label}: ${c.parsed.y}%` : ` ${c.dataset.label}: ${money(c.parsed.y)}` } } },
+        scales:{ x:{ grid:{ display:false } },
+          y:{ beginAtZero:true, grid:{ color:'#EEF2F7' }, ticks:{ callback: axisTick } },
+          y1:{ position:'right', beginAtZero:true, grid:{ display:false }, ticks:{ callback: v => v + '%' } } } }
+    });
+  }
 }
 bootPage('expense', 'ค่าใช้จ่าย', { owner:false, store:false }, renderExpense);
 </script>
