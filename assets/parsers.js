@@ -45,8 +45,20 @@ const toNum = v => {
   return isFinite(n) ? n : 0;
 };
 
-/* สถานะที่ไม่นับเป็นยอดขาย */
-const BAD_STATUS = ['ผิดปกติ', 'ยกเลิก', 'ยกเลิกแล้ว', 'คืนสินค้า', 'คืนเงิน', 'ตีกลับ'];
+/* สถานะที่ไม่นับเป็นยอดขาย
+   หมายเหตุ: "ผิดปกติ" นับเป็นยอดขาย (ตรงกับที่ทีมสรุปในไฟล์ Master) */
+const BAD_STATUS = ['ยกเลิก', 'ยกเลิกแล้ว', 'คืนสินค้า', 'คืนเงิน', 'ตีกลับ'];
+
+/* ผู้ดูแลที่ไม่นับเข้าระบบนี้ — ข้ามทั้งยอดขายและค่าใช้จ่าย */
+const EXCLUDE_OWNERS = ['แป้งแป้ง', 'ฝ้าย', 'จอน'];
+
+/* ชื่อผู้ดูแลที่สะกดต่างกันระหว่างไฟล์ยอดขายกับไฟล์ค่าแอด */
+const OWNER_ALIAS = { 'กีต้าร์':'กีตาร์', 'เบนจามิน':'เบน', 'เบนจา':'เบน' };
+const normOwner = v => {
+  const s = clean(v);
+  return OWNER_ALIAS[s] || s;
+};
+const isExcludedOwner = v => EXCLUDE_OWNERS.includes(normOwner(v));
 
 /* ชื่อคอลัมน์ที่ยอมรับ (เผื่อไฟล์เดือนใหม่พิมพ์ต่างไปเล็กน้อย) */
 const COL_SALES = {
@@ -100,7 +112,7 @@ function splitBundle(s){
 /* ---- 1) ยอดขาย : ชีท "Data" ของไฟล์ report_YYYY_-_M.xlsx ---- */
 function parseSales(wb, sheetNames){
   const sales = [], skus = [], warn = [];
-  let skipped = 0, nonLazada = 0;
+  let skipped = 0, nonLazada = 0, dropped = 0;
 
   for (const sn of sheetNames){
     const seen = new Map();
@@ -138,7 +150,8 @@ function parseSales(wb, sheetNames){
       const id = hashKey(base + '#' + c);
 
       const store = clean(row[ix.store]) || 'ไม่ระบุ';
-      const owner = clean(row[ix.owner]) || 'ไม่ระบุ';
+      const owner = normOwner(row[ix.owner]) || 'ไม่ระบุ';
+      if (isExcludedOwner(owner)){ dropped++; continue; }
 
       sales.push({
         id, order_no: order, order_date: iso,
@@ -158,6 +171,7 @@ function parseSales(wb, sheetNames){
     }
   }
   if (nonLazada) warn.push(`ข้าม ${nonLazada} แถวที่ไม่ใช่ Lazada`);
+  if (dropped)   warn.push(`ข้าม ${dropped} แถวของผู้ดูแลที่ไม่นับ (${EXCLUDE_OWNERS.join(', ')})`);
   if (skipped)   warn.push(`ข้าม ${skipped} แถวที่วันที่ไม่ถูกต้อง`);
   return { rows: sales, skus, warn };
 }
@@ -167,12 +181,17 @@ const COL_EXP = {
   date:  ['วันที่', 'วันที่ชำระ', 'วันที่ชำระเงิน'],
   store: ['ร้านค้า', 'ร้าน / รายละเอียด', 'รายละเอียด'],
   owner: ['ผู้ดูแล'],
-  total: ['รวม', 'ยอดเบิกเงิน', 'จำนวนเงิน', 'ยอดเงิน'],
+  base:  ['ยอดเงิน'],
+  vat:   ['ภาษี7%', 'ภาษี 7%', 'ภาษี'],
+  total: ['รวม', 'ยอดเบิกเงิน', 'จำนวนเงิน'],
+  adSale:['ยอดขาย'],
+  status:['สถานะ'],
   cat:   ['ประเภท', 'ค่าใช้จ่าย'],
   order: ['เลขออเดอร์ออนไลน์']
 };
 function parseExpense(wb, sheetNames){
   const rows = [], warn = [];
+  let dropped = 0;
   for (const sn of sheetNames){
     const aoa = sheetAoa(wb, sn);
     const hr = findHeaderRow(aoa, [COL_EXP.date, COL_EXP.total, COL_EXP.owner, COL_EXP.store]);
@@ -196,13 +215,22 @@ function parseExpense(wb, sheetNames){
       const cat = (ix.cat >= 0 ? clean(row[ix.cat]) : '') || fallbackCat;
       /* กรองเฉพาะรายการที่เกี่ยวกับ Lazada เมื่อชีทรวมหลายแพลตฟอร์ม */
       if (/shopee|tiktok/i.test(cat)) continue;
+      const owner = normOwner(row[ix.owner]);
+      if (isExcludedOwner(owner)){ dropped++; continue; }
       const store = clean(row[ix.store]) || (ix.order >= 0 ? clean(row[ix.order]) : '');
       const base = ['E', iso, cat, store, amt].join('|');
       const c = (seen.get(base) || 0) + 1; seen.set(base, c);
-      rows.push({ id: hashKey(base + '#' + c), pay_date: iso, category: cat,
-        store, owner: ix.owner >= 0 ? clean(row[ix.owner]) : '', detail: sn, amount: amt });
+      rows.push({
+        id: hashKey(base + '#' + c), pay_date: iso, category: cat,
+        store, owner, detail: sn, amount: amt,
+        base_amount: ix.base >= 0 ? toNum(row[ix.base]) : null,
+        vat:         ix.vat  >= 0 ? toNum(row[ix.vat])  : null,
+        ad_sales:    ix.adSale >= 0 ? (toNum(row[ix.adSale]) || null) : null,
+        status:      ix.status >= 0 ? clean(row[ix.status]) : null
+      });
     }
   }
+  if (dropped) warn.push(`ข้าม ${dropped} แถวของผู้ดูแลที่ไม่นับ (${EXCLUDE_OWNERS.join(', ')})`);
   return { rows, warn };
 }
 
