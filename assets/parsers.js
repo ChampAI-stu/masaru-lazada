@@ -23,19 +23,30 @@ function normYMD(y, m, d){
 }
 function toISO(v){
   if (v == null || v === '') return null;
-  if (v instanceof Date && !isNaN(v)) return normYMD(v.getFullYear(), v.getMonth()+1, v.getDate());
+
+  /* ตัวเลข = serial ของ Excel — แปลงด้วย SSF ซึ่งให้ผลเท่ากันทุกโซนเวลา */
   if (typeof v === 'number' && isFinite(v)){
-    const d = new Date(Math.round((v - 25569) * 86400000));
-    if (isNaN(d)) return null;
-    return normYMD(d.getUTCFullYear(), d.getUTCMonth()+1, d.getUTCDate());
+    try {
+      const d = XLSX.SSF.parse_date_code(v);
+      if (d && d.y) return normYMD(d.y, d.m, d.d);
+    } catch (e) { /* ตกไปใช้วิธีสำรองด้านล่าง */ }
+    const d2 = new Date(Math.round((v - 25569) * 86400000));
+    if (isNaN(d2)) return null;
+    return normYMD(d2.getUTCFullYear(), d2.getUTCMonth() + 1, d2.getUTCDate());
   }
+
+  /* ถ้าไฟล์ถูกอ่านมาเป็น Date ให้ใช้ค่า UTC เสมอ ห้ามใช้เวลาท้องถิ่น
+     ไม่งั้นเครื่องที่ตั้งเวลาไทย (UTC+7) จะได้วันที่เลื่อนไป 1 วัน */
+  if (v instanceof Date && !isNaN(v))
+    return normYMD(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate());
+
   const s = String(v).trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return normYMD(+m[1], +m[2], +m[3]);
   m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
   if (m) return normYMD(+m[3], +m[2], +m[1]);
   const d = new Date(s);
-  if (!isNaN(d)) return normYMD(d.getFullYear(), d.getMonth()+1, d.getDate());
+  if (!isNaN(d)) return normYMD(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
   return null;
 }
 const toNum = v => {
