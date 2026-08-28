@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ทีม / รายคน · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<script>
+async function renderTeam(){
+  const r = filterRange(), rp = prevYearRange();
+  const year = curYear();
+  const [own, ownPrev, store, targets] = await Promise.all([
+    SB.rpcCached('f_sales_owner', rpcArgs(r)),
+    SB.rpcCached('f_sales_owner', rpcArgs(rp)),
+    SB.rpcCached('f_sales_store', rpcArgs(r)),
+    SB.selectCached('lz_targets', `select=*&year=eq.${year}`)
+  ]);
+  if (!own.length){
+    $('#view').innerHTML = emptyState('ไม่มีข้อมูลในช่วงที่เลือก', 'ลองเปลี่ยนปี/เดือน หรืออัปโหลดไฟล์เพิ่ม', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+  const prevMap = {}; ownPrev.forEach(x => prevMap[x.owner] = +x.amount);
+  const total = own.reduce((s,x) => s + +x.amount, 0);
+
+  /* เป้าของช่วงที่เลือก: ทั้งปีใช้เป้าปี, เลือกเดือนใช้เป้าเดือน */
+  const goal = FILTER.month === 'all'
+    ? +(targets.find(t => t.kind === 'year')?.amount || 0)
+    : +(targets.find(t => t.kind === 'month' && +t.month === +FILTER.month)?.amount || 0);
+
+  const rows = own.map((x, i) => ({
+    rank:i+1, owner:x.owner, amount:+x.amount, orders:+x.orders, qty:+x.qty,
+    camp:+x.camp_amount, avg: x.orders ? +x.amount / +x.orders : 0,
+    share:+x.amount / total * 100, yoy: growth(+x.amount, prevMap[x.owner])
+  }));
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi('ยอดขายรวมทีม', money(total), `${own.length} คน · ${growthChip(growth(total, ownPrev.reduce((s,x)=>s + +x.amount,0)))}`, 'o')}
+      ${kpi('เป้าหมายช่วงนี้', goal ? money(goal) : '—',
+            goal ? `ทำได้ ${(total/goal*100).toFixed(1)}% · ขาด ${money(Math.max(goal-total,0))}` : 'ยังไม่ตั้งเป้า', 'g')}
+      ${kpi('คนที่ทำยอดสูงสุด', esc(rows[0].owner), money(rows[0].amount), 'ok')}
+      ${kpi('ร้านที่ขายได้', num(store.length) + ' ร้าน', 'ในช่วงที่เลือก', 'n')}
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-h"><h3>ยอดขายรายคน</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cOwner"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>สัดส่วนยอดขายรายคน</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cShare"></canvas></div></div>
+      </div>
+    </div>
+
+    ${renderTable([
+      { t:'#', k:'rank', fmt: r => `<span class="rank">${r.rank}</span>` },
+      { t:'ผู้ดูแล', k:'owner' },
+      { t:'ยอดขาย', num:1, bar:1, sum:1, raw: r => r.amount, fmt: r => money(r.amount) },
+      { t:'สัดส่วน', num:1, raw: r => r.share, fmt: r => r.share.toFixed(1) + '%' },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'ชิ้น', num:1, sum:1, raw: r => r.qty, fmt: r => num(r.qty), sumFmt: num },
+      { t:'เฉลี่ย/ออเดอร์', num:1, raw: r => r.avg, fmt: r => money(r.avg) },
+      { t:'ยอดเลขเบิ้ล', num:1, sum:1, raw: r => r.camp, fmt: r => money(r.camp) },
+      { t:'เทียบปีที่แล้ว', num:1, raw: r => r.yoy ?? -9e9, fmt: r => growthChip(r.yoy) }
+    ], rows, { title:'ยอดขายรายบุคคล', sort:2, total:true, search:true, download:'ยอดขายรายคน_Lazada' })}
+
+    ${renderTable([
+      { t:'#', k:'x', fmt: (r,i) => `<span class="rank">${i+1}</span>` },
+      { t:'ร้านค้า', k:'store' },
+      { t:'ผู้ดูแล', k:'owner' },
+      { t:'ยอดขาย', num:1, bar:1, sum:1, raw: r => +r.amount, fmt: r => money(r.amount) },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => +r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'เฉลี่ย/ออเดอร์', num:1, raw: r => r.orders ? r.amount/r.orders : 0, fmt: r => money(r.orders ? r.amount/r.orders : 0) }
+    ], store, { title:'ยอดขายรายร้าน', sort:3, total:true, search:true, download:'ยอดขายรายร้าน_Lazada' })}`;
+
+  paintTables();
+  chart('cOwner', hbarCfg(rows.map(x => x.owner), rows.map(x => x.amount), C.orange));
+  chart('cShare', doughnutCfg(rows.map(x => x.owner), rows.map(x => x.amount)));
+}
+bootPage('team', 'ทีม / รายคน', {}, renderTeam);
+</script>
+</body>
+</html>

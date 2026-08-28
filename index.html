@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MASARU · ระบบทีม Lazada</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/* ================= เข้าสู่ระบบ ================= */
+function loginScreen(mode){
+  const signup = mode === 'signup';
+  document.getElementById('root').innerHTML = `
+  <div class="login-wrap"><div class="login">
+    <div class="mark">MASARU<span>·</span>Lazada</div>
+    <div class="sub">${signup ? 'สร้างบัญชีใหม่สำหรับทีม Lazada' : 'ระบบข้อมูลทีม Lazada — เข้าสู่ระบบเพื่อใช้งาน'}</div>
+    <div class="fld"><label>อีเมล</label>
+      <input id="em" type="email" autocomplete="username" placeholder="you@masaru.co.th"></div>
+    <div class="fld"><label>รหัสผ่าน</label>
+      <input id="pw" type="password" autocomplete="${signup?'new-password':'current-password'}"
+        placeholder="${signup?'อย่างน้อย 6 ตัวอักษร':'รหัสผ่าน'}"></div>
+    ${signup ? `<div class="fld"><label>รหัสเชิญ</label>
+      <input id="iv" placeholder="ขอจากหัวหน้าทีม"></div>` : ''}
+    <div id="msg" style="margin-bottom:12px"></div>
+    <button class="btn p" id="go">${signup ? 'สร้างบัญชี' : 'เข้าสู่ระบบ'}</button>
+    <div class="alt">${signup
+      ? 'มีบัญชีอยู่แล้ว? <a onclick="loginScreen(\'signin\')">เข้าสู่ระบบ</a>'
+      : 'ยังไม่มีบัญชี? <a onclick="loginScreen(\'signup\')">สร้างบัญชีใหม่</a>'}</div>
+  </div></div>`;
+  const msg = (t, k) => document.getElementById('msg').innerHTML =
+    `<div class="${k === 'ok' ? 'okbox' : 'err'}">${esc(t)}</div>`;
+
+  const submit = async () => {
+    const btn = document.getElementById('go');
+    const email = document.getElementById('em').value.trim();
+    const pw = document.getElementById('pw').value;
+    if (!email || !pw) return msg('กรอกอีเมลและรหัสผ่านให้ครบ');
+    btn.disabled = true; btn.textContent = 'กำลังดำเนินการ…';
+    try {
+      if (signup){
+        const code = document.getElementById('iv').value.trim();
+        if (!code) throw new Error('กรอกรหัสเชิญ — ขอจากหัวหน้าทีม');
+        await SB.signUp(email, pw);
+        try {
+          await SB.signIn(email, pw);
+          await SB.rpc('claim_profile', { p_code: code });
+          lsSet('member', true);
+          location.reload(); return;
+        } catch (e2) {
+          msg('สร้างบัญชีแล้ว — กดลิงก์ยืนยันในอีเมล แล้วกลับมาเข้าสู่ระบบ ระบบจะถามรหัสเชิญอีกครั้ง', 'ok');
+          btn.disabled = false; btn.textContent = 'สร้างบัญชี'; return;
+        }
+      }
+      await SB.signIn(email, pw);
+      const ok = await SB.loadMember();
+      if (!ok){ claimScreen(); return; }
+      location.reload();
+    } catch (e) {
+      msg(e.message);
+      btn.disabled = false; btn.textContent = signup ? 'สร้างบัญชี' : 'เข้าสู่ระบบ';
+    }
+  };
+  document.getElementById('go').onclick = submit;
+  document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+}
+
+/* ========== บัญชีที่ยังไม่ได้ใส่รหัสเชิญ ========== */
+function claimScreen(){
+  document.getElementById('root').innerHTML = `
+  <div class="login-wrap"><div class="login">
+    <div class="mark">MASARU<span>·</span>Lazada</div>
+    <div class="sub">บัญชีนี้ยังไม่ได้เปิดสิทธิ์ — ใส่รหัสเชิญเพื่อเข้าใช้งาน</div>
+    <div class="fld"><label>รหัสเชิญ</label><input id="iv" placeholder="ขอจากหัวหน้าทีม"></div>
+    <div id="msg" style="margin-bottom:12px"></div>
+    <button class="btn p" id="go">ยืนยันรหัส</button>
+    <div class="alt"><a onclick="SB.signOut()">ออกจากระบบ</a></div>
+  </div></div>`;
+  document.getElementById('go').onclick = async () => {
+    const btn = document.getElementById('go');
+    btn.disabled = true; btn.textContent = 'กำลังตรวจสอบ…';
+    try {
+      await SB.rpc('claim_profile', { p_code: document.getElementById('iv').value.trim() });
+      lsSet('member', true);
+      location.reload();
+    } catch (e) {
+      document.getElementById('msg').innerHTML = `<div class="err">${esc(e.message)}</div>`;
+      btn.disabled = false; btn.textContent = 'ยืนยันรหัส';
+    }
+  };
+}
+
+/* ================= ภาพรวม ================= */
+async function renderOverview(){
+  const year = curYear();
+  const args     = rpcArgs({ from: `${year}-01-01`, to: `${year}-12-31` });
+  const argsPrev = rpcArgs({ from: `${year-1}-01-01`, to: `${year-1}-12-31` });
+
+  const [mon, monPrev, targets] = await Promise.all([
+    SB.rpcCached('f_sales_monthly', args),
+    SB.rpcCached('f_sales_monthly', argsPrev),
+    SB.selectCached('lz_targets', `select=*&year=eq.${year}`)
+  ]);
+
+  if (!mon.length){
+    $('#view').innerHTML = emptyState('ยังไม่มีข้อมูลยอดขาย',
+      'อัปโหลดไฟล์ report_YYYY_-_M.xlsx ที่หน้า "นำเข้าข้อมูล" เพื่อเริ่มใช้งาน', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+
+  const byM  = {}; mon.forEach(r => byM[+r.ym.slice(5)] = r);
+  const byMp = {}; monPrev.forEach(r => byMp[+r.ym.slice(5)] = r);
+
+  /* เดือนที่ใช้เป็น "เดือนปัจจุบัน" — ตามตัวกรอง ถ้าเลือกทั้งปีให้ใช้เดือนล่าสุดที่มีข้อมูล */
+  const months = Object.keys(byM).map(Number).sort((a,b) => a-b);
+  const M = FILTER.month === 'all' ? months[months.length-1] : +FILTER.month;
+  const cur  = byM[M] || {};
+  const prev = byM[M-1] || (M === 1 ? byMp[12] : null) || {};
+  const lastY = byMp[M] || {};
+
+  const gSales = growth(cur.amount, prev.amount);
+  const gCamp  = growth(cur.camp_amount, prev.camp_amount);
+  const gOrder = growth(cur.orders, prev.orders);
+  const gYoY   = growth(cur.amount, lastY.amount);
+
+  const goal = +(targets.find(t => t.kind === 'year')?.amount || 150000000);
+  const acc  = mon.reduce((s, r) => s + (+r.amount || 0), 0);
+  const accPrev = monPrev.reduce((s, r) => s + (+r.amount || 0), 0);
+  const gap  = Math.max(goal - acc, 0);
+  const pct  = goal ? acc / goal * 100 : 0;
+  const done = months.length;
+  const left = Math.max(12 - done, 0);
+  const should = goal / 12 * done;
+  const diff = acc - should;
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi(`ยอดขายเดือน${TH_MONTH[M]} ${beYear(year)}`, money(cur.amount),
+            `เดือนก่อน ${money(prev.amount)} · ${growthChip(gSales)}`, 'o')}
+      ${kpi(`ยอดแคมเปญ ${M}.${M}`, money(cur.camp_amount),
+            `เดือนก่อน ${money(prev.camp_amount)} · ${growthChip(gCamp)}`, 'g')}
+      ${kpi('ออเดอร์เดือนนี้', num(cur.orders) + ' ออเดอร์',
+            `${num(cur.qty)} ชิ้น · ${growthChip(gOrder)}`, 'n')}
+      ${kpi('เทียบเดือนเดียวกันปีที่แล้ว', growthChip(gYoY),
+            `${TH_MON_S[M]} ${beYear(year-1)} = ${money(lastY.amount)}`, gYoY >= 0 ? 'ok' : 'r')}
+    </div>
+
+    <div class="grid3">
+      <div class="panel">
+        <div class="panel-h"><h3>ยอดขายสะสมประจำปี ${beYear(year)} (${year})</h3>
+          <span class="hint">เป้าทั้งปี ${money(goal)}</span></div>
+        <div class="panel-b">
+          <div class="goal">
+            <div class="ring"><canvas id="cGoal"></canvas>
+              <div class="mid"><div class="v">${pct.toFixed(1)}%</div><div class="l">ของเป้าทั้งปี</div></div>
+            </div>
+            <div class="lines">
+              <div class="gline"><span class="l">เป้าหมายทั้งปี</span><span class="v">${money(goal)}</span></div>
+              <div class="gline"><span class="l">ยอดรวมสะสม</span><span class="v" style="color:var(--orange)">${money(acc)}</span></div>
+              <div class="gline"><span class="l">ยอดที่ยังขาด</span><span class="v">${money(gap)}</span></div>
+              <div class="gline"><span class="l">ต้องทำเฉลี่ยต่อเดือน (เหลือ ${left} เดือน)</span>
+                <span class="v">${left ? money(gap / left) : '—'}</span></div>
+              <div class="gline"><span class="l">สะสมปีที่แล้วช่วงเดียวกัน</span>
+                <span class="v">${money(accPrev)} ${growthChip(growth(acc, accPrev))}</span></div>
+            </div>
+          </div>
+          <div class="pacewrap">
+            <div class="pacebar"><i style="width:${Math.min(pct,100).toFixed(1)}%"></i>
+              <div class="pacemark" style="left:${Math.min(done/12*100,100).toFixed(1)}%"></div></div>
+            <div class="pacetxt">ผ่านมา ${done} เดือน ควรทำได้ <b>${money(should)}</b> ·
+              <span class="${diff >= 0 ? 'up' : 'down'}">${diff >= 0 ? 'เกินเป้า' : 'ต่ำกว่าเป้า'} ${money(Math.abs(diff))}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h3>สัดส่วนยอดสะสม</h3></div>
+        <div class="panel-b"><div class="chartbox sm"><canvas id="cSplit"></canvas></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>ยอดขายรายเดือน เทียบปีที่แล้ว</h3>
+        <span class="hint">แท่งส้ม = ${beYear(year)} · แท่งเทา = ${beYear(year-1)}</span></div>
+      <div class="panel-b"><div class="chartbox lg"><canvas id="cMonth"></canvas></div></div>
+    </div>
+
+    ${renderTable([
+      { t:'เดือน', k:'m', fmt: r => TH_MONTH[r.m] },
+      { t:'ยอดขาย', num:1, bar:1, sum:1, raw: r => r.amount, fmt: r => money(r.amount) },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'ชิ้น', num:1, sum:1, raw: r => r.qty, fmt: r => num(r.qty), sumFmt: num },
+      { t:'ยอดเลขเบิ้ล', num:1, sum:1, raw: r => r.camp, fmt: r => money(r.camp) },
+      { t:'เทียบเดือนก่อน', num:1, raw: r => r.mom ?? -9e9, fmt: r => growthChip(r.mom) },
+      { t:`เทียบ ${beYear(year-1)}`, num:1, raw: r => r.yoy ?? -9e9, fmt: r => growthChip(r.yoy) }
+    ], months.map((m, i) => ({
+      m, amount:+byM[m].amount, orders:+byM[m].orders, qty:+byM[m].qty,
+      camp:+byM[m].camp_amount,
+      mom: growth(byM[m].amount, i ? byM[months[i-1]].amount : (m === 1 ? byMp[12]?.amount : null)),
+      yoy: growth(byM[m].amount, byMp[m]?.amount)
+    })), { title:'สรุปรายเดือน', sort:0, dir:'asc', total:true, download:'ยอดขายรายเดือน_Lazada' })}
+
+    <div class="mods">
+      ${MODULES.filter(m => m.id !== 'index').map(m => `
+        <a class="mod" href="${m.file}">
+          <div class="mic">${m.ic}</div>
+          <h4>${esc(m.t)}</h4><p>${esc(m.d)}</p>
+        </a>`).join('')}
+    </div>`;
+
+  paintTables();
+
+  chart('cGoal', {
+    type:'doughnut',
+    data:{ labels:['ยอดสะสม','ยังขาด'],
+      datasets:[{ data:[acc, gap], backgroundColor:[C.orange, '#E7EAF2'], borderWidth:0 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'75%',
+      plugins:{ legend:{ display:false },
+        tooltip:{ callbacks:{ label: c => ` ${c.label}: ${money(c.parsed)}` } } } }
+  });
+
+  const camp = mon.reduce((s, r) => s + (+r.camp_amount || 0), 0);
+  chart('cSplit', doughnutCfg(['ยอดวันเลขเบิ้ล','ยอดวันปกติ'], [camp, Math.max(acc - camp, 0)],
+    [C.gold, C.navy]));
+
+  chart('cMonth', barCfg(
+    TH_MON_S.slice(1),
+    [{ label: 'ปี ' + beYear(year),   data: Array.from({length:12}, (_,i) => +byM[i+1]?.amount || null),  backgroundColor: C.orange, borderRadius:5 },
+     { label: 'ปี ' + beYear(year-1), data: Array.from({length:12}, (_,i) => +byMp[i+1]?.amount || null), backgroundColor: C.grey,   borderRadius:5 }]
+  ));
+}
+
+/* ================= เริ่มทำงาน ================= */
+(async function(){
+  if (!SB.token()){ loginScreen('signin'); return; }
+  const ok = await SB.loadMember();
+  if (!ok){ claimScreen(); return; }
+  document.getElementById('root').remove();
+  bootPage('index', 'ภาพรวม', { store:true }, renderOverview);
+})();
+</script>
+</body>
+</html>

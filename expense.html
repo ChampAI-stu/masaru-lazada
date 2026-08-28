@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ค่าใช้จ่าย · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<script>
+async function renderExpense(){
+  const r = filterRange();
+  const [exp, mon] = await Promise.all([
+    SB.selectCached('lz_expense', `select=*&pay_date=gte.${r.from}&pay_date=lte.${r.to}&order=pay_date.desc`),
+    SB.rpcCached('f_sales_monthly', rpcArgs(r))
+  ]);
+  if (!exp.length){
+    $('#view').innerHTML = emptyState('ยังไม่มีข้อมูลค่าใช้จ่าย',
+      'อัปโหลดไฟล์ Lazada_ค่าใช้จ่าย_YYYY.xlsx ที่หน้านำเข้าข้อมูล', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+  const total = exp.reduce((s,x) => s + +x.amount, 0);
+  const sales = mon.reduce((s,x) => s + +x.amount, 0);
+  const ratio = sales ? total / sales * 100 : 0;
+
+  const byCat = {}; exp.forEach(x => byCat[x.category] = (byCat[x.category] || 0) + +x.amount);
+  const cats = Object.keys(byCat).sort((a,b) => byCat[b] - byCat[a]);
+
+  const byMon = {}; exp.forEach(x => { const m = mOf(x.pay_date); byMon[m] = (byMon[m] || 0) + +x.amount; });
+  const salesMon = {}; mon.forEach(x => salesMon[+x.ym.slice(5)] = +x.amount);
+
+  const monthRows = Array.from({length:12}, (_, i) => i + 1)
+    .filter(m => byMon[m] || salesMon[m])
+    .map(m => ({ m, exp: byMon[m] || 0, sales: salesMon[m] || 0,
+                 ratio: salesMon[m] ? (byMon[m] || 0) / salesMon[m] * 100 : 0,
+                 net: (salesMon[m] || 0) - (byMon[m] || 0) }));
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi('ค่าใช้จ่ายรวม', money(total), `${num(exp.length)} รายการ`, 'r')}
+      ${kpi('ยอดขายในช่วงเดียวกัน', money(sales), '', 'o')}
+      ${kpi('สัดส่วนค่าใช้จ่าย', ratio.toFixed(2) + '%', 'ของยอดขาย', ratio > 15 ? 'r' : 'ok')}
+      ${kpi('หมวดที่ใช้มากที่สุด', esc(cats[0]), money(byCat[cats[0]]), 'g')}
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-h"><h3>ค่าใช้จ่ายเทียบยอดขายรายเดือน</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cMix"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>สัดส่วนตามหมวด</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cCat"></canvas></div></div>
+      </div>
+    </div>
+
+    ${renderTable([
+      { t:'เดือน', k:'m', fmt: r => TH_MONTH[r.m] },
+      { t:'ยอดขาย', num:1, sum:1, raw: r => r.sales, fmt: r => money(r.sales) },
+      { t:'ค่าใช้จ่าย', num:1, bar:1, sum:1, raw: r => r.exp, fmt: r => money(r.exp) },
+      { t:'% ต่อยอดขาย', num:1, raw: r => r.ratio,
+        fmt: r => `<span class="${r.ratio > 15 ? 'down' : 'up'}">${r.ratio.toFixed(2)}%</span>` },
+      { t:'คงเหลือ', num:1, sum:1, raw: r => r.net, fmt: r => money(r.net) }
+    ], monthRows, { title:'สรุปรายเดือน', sort:0, dir:'asc', total:true, download:'ค่าใช้จ่ายรายเดือน_Lazada' })}
+
+    ${renderTable([
+      { t:'หมวด', k:'cat' },
+      { t:'ยอดรวม', num:1, bar:1, sum:1, raw: r => r.amt, fmt: r => money(r.amt) },
+      { t:'สัดส่วน', num:1, raw: r => r.amt/total*100, fmt: r => (r.amt/total*100).toFixed(1) + '%' }
+    ], cats.map(c => ({ cat:c, amt:byCat[c] })),
+       { title:'แยกตามหมวด', sort:1, total:true, download:'ค่าใช้จ่ายตามหมวด_Lazada' })}
+
+    ${renderTable([
+      { t:'วันที่', k:'pay_date', fmt: r => thDate(r.pay_date) },
+      { t:'หมวด', k:'category' },
+      { t:'ร้าน / รายละเอียด', k:'store' },
+      { t:'ผู้ดูแล', k:'owner' },
+      { t:'จำนวนเงิน', num:1, bar:1, sum:1, raw: r => +r.amount, fmt: r => money2(r.amount) }
+    ], exp, { title:'รายการทั้งหมด', sort:0, search:true, total:true, download:'ค่าใช้จ่าย_Lazada' })}`;
+
+  paintTables();
+
+  const labels = monthRows.map(r => TH_MON_S[r.m]);
+  chart('cMix', {
+    type:'bar',
+    data:{ labels, datasets:[
+      { label:'ยอดขาย', data: monthRows.map(r => r.sales), backgroundColor:C.orange, borderRadius:5 },
+      { label:'ค่าใช้จ่าย', data: monthRows.map(r => r.exp), backgroundColor:C.red, borderRadius:5 },
+      { label:'% ต่อยอดขาย', type:'line', yAxisID:'y1', data: monthRows.map(r => +r.ratio.toFixed(2)),
+        borderColor:C.navy, borderWidth:2, pointRadius:2.5, tension:.3 }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12 } } },
+      scales:{ x:{ grid:{ display:false } },
+        y:{ beginAtZero:true, grid:{ color:'#EEF2F7' }, ticks:{ callback: axisTick } },
+        y1:{ position:'right', beginAtZero:true, grid:{ display:false }, ticks:{ callback: v => v + '%' } } } }
+  });
+  chart('cCat', doughnutCfg(cats, cats.map(c => byCat[c])));
+}
+bootPage('expense', 'ค่าใช้จ่าย', { owner:false, store:false }, renderExpense);
+</script>
+</body>
+</html>

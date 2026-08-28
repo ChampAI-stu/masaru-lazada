@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>เลขเบิ้ล · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<script>
+async function renderCampaign(){
+  const year = curYear();
+  const A  = rpcArgs({ from:`${year}-01-01`,   to:`${year}-12-31` });
+  const Ap = rpcArgs({ from:`${year-1}-01-01`, to:`${year-1}-12-31` });
+  const [cam, camPrev, mon, targets] = await Promise.all([
+    SB.rpcCached('f_campaign', A),
+    SB.rpcCached('f_campaign', Ap),
+    SB.rpcCached('f_sales_monthly', A),
+    SB.selectCached('lz_targets', `select=*&year=eq.${year}`)
+  ]);
+  if (!cam.length){
+    $('#view').innerHTML = emptyState('ยังไม่มีข้อมูลวันเลขเบิ้ล',
+      'วันเลขเบิ้ลคือวันที่ตรงกับเลขเดือน (1.1, 2.2, 3.3 …) ระบบติดธงให้อัตโนมัติตอนนำเข้าข้อมูล', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+  const cur = {}; cam.forEach(x => cur[+x.ym.slice(5)] = x);
+  const prv = {}; camPrev.forEach(x => prv[+x.ym.slice(5)] = x);
+  const monMap = {}; mon.forEach(x => monMap[+x.ym.slice(5)] = x);
+  const tgMap = {}; targets.filter(t => t.kind === 'campaign').forEach(t => tgMap[+t.month] = +t.amount);
+
+  const rows = Array.from({length:12}, (_, i) => {
+    const m = i + 1, c = cur[m], p = prv[m];
+    return {
+      m, label:`${m}.${m}`, d: c ? c.d : null,
+      amount: c ? +c.amount : null, orders: c ? +c.orders : 0, qty: c ? +c.qty : 0,
+      prev: p ? +p.amount : null,
+      yoy: growth(c ? +c.amount : 0, p ? +p.amount : 0),
+      goal: tgMap[m] || 0,
+      hit: (c && tgMap[m]) ? +c.amount / tgMap[m] * 100 : null,
+      share: (c && monMap[m]) ? +c.amount / +monMap[m].amount * 100 : null
+    };
+  }).filter(r => r.amount !== null || r.prev !== null);
+
+  const totCur  = rows.reduce((s,r) => s + (r.amount || 0), 0);
+  const totPrev = rows.reduce((s,r) => s + (r.prev || 0), 0);
+  const best    = [...rows].filter(r => r.amount).sort((a,b) => b.amount - a.amount)[0];
+  const yearAmt = mon.reduce((s,x) => s + +x.amount, 0);
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi(`ยอดวันเลขเบิ้ลรวมปี ${beYear(year)}`, money(totCur),
+            `${growthChip(growth(totCur, totPrev))} เทียบปี ${beYear(year-1)} (${money(totPrev)})`, 'g')}
+      ${kpi('คิดเป็นสัดส่วนของทั้งปี', yearAmt ? (totCur/yearAmt*100).toFixed(2) + '%' : '—',
+            `จากยอดขายทั้งปี ${money(yearAmt)}`, 'o')}
+      ${kpi('แคมเปญที่ทำยอดสูงสุด', best ? best.label : '—',
+            best ? money(best.amount) + ' · ' + thDate(best.d) : '', 'ok')}
+      ${kpi('จำนวนแคมเปญที่ถึงเป้า', num(rows.filter(r => r.hit !== null && r.hit >= 100).length) + ' / ' + num(rows.filter(r => r.amount).length),
+            'เป้า ' + money(tgMap[1] || 0) + ' ต่อครั้ง', 'n')}
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>ยอดขายวันเลขเบิ้ล เทียบปีที่แล้ว</h3>
+        <span class="hint">แท่งทอง = ${beYear(year)} · แท่งเทา = ${beYear(year-1)} · เส้นประ = เป้าต่อครั้ง</span></div>
+      <div class="panel-b"><div class="chartbox lg"><canvas id="cCamp"></canvas></div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-h"><h3>% การเติบโตรายแคมเปญ</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cYoY"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>สัดส่วนวันเลขเบิ้ลต่อยอดทั้งเดือน</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cShare"></canvas></div></div>
+      </div>
+    </div>
+
+    ${renderTable([
+      { t:'แคมเปญ', k:'label' },
+      { t:'วันที่', k:'d', fmt: r => thDate(r.d) },
+      { t:`ปี ${beYear(year)}`, num:1, bar:1, sum:1, raw: r => r.amount || 0, fmt: r => r.amount ? money(r.amount) : '—' },
+      { t:`ปี ${beYear(year-1)}`, num:1, sum:1, raw: r => r.prev || 0, fmt: r => r.prev ? money(r.prev) : '—' },
+      { t:'เทียบปีที่แล้ว', num:1, raw: r => r.yoy ?? -9e9, fmt: r => growthChip(r.yoy) },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'เป้าต่อครั้ง', num:1, raw: r => r.goal, fmt: r => r.goal ? money(r.goal) : '—' },
+      { t:'% ของเป้า', num:1, raw: r => r.hit ?? -1,
+        fmt: r => r.hit === null ? '—' : `<span class="${r.hit >= 100 ? 'up' : 'down'}">${r.hit.toFixed(0)}%</span>` },
+      { t:'% ของยอดเดือน', num:1, raw: r => r.share ?? -1, fmt: r => r.share === null ? '—' : r.share.toFixed(2) + '%' }
+    ], rows, { title:'รายละเอียดรายแคมเปญ', sort:0, dir:'asc', total:true, download:'แคมเปญเลขเบิ้ล_Lazada' })}`;
+
+  paintTables();
+
+  const goalLine = rows.map(r => r.goal || null);
+  chart('cCamp', {
+    type:'bar',
+    data:{ labels: rows.map(r => r.label), datasets:[
+      { label:'ปี ' + beYear(year),   data: rows.map(r => r.amount), backgroundColor: C.gold,  borderRadius:5 },
+      { label:'ปี ' + beYear(year-1), data: rows.map(r => r.prev),   backgroundColor: C.grey,  borderRadius:5 },
+      { label:'เป้าต่อครั้ง', type:'line', data: goalLine, borderColor:C.red, borderWidth:2,
+        borderDash:[6,4], pointRadius:0 }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12 } },
+        tooltip:{ callbacks:{ label: c => ` ${c.dataset.label}: ${money(c.parsed.y)}` } } },
+      scales:{ x:{ grid:{ display:false } },
+        y:{ beginAtZero:true, grid:{ color:'#EEF2F7' }, ticks:{ callback: axisTick } } } }
+  });
+
+  chart('cYoY', {
+    type:'bar',
+    data:{ labels: rows.map(r => r.label),
+      datasets:[{ data: rows.map(r => r.yoy === null ? null : +r.yoy.toFixed(1)),
+        backgroundColor: rows.map(r => (r.yoy || 0) >= 0 ? C.green : C.red), borderRadius:5 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label: c => ` ${c.parsed.y}%` } } },
+      scales:{ x:{ grid:{ display:false } }, y:{ grid:{ color:'#EEF2F7' }, ticks:{ callback: v => v + '%' } } } }
+  });
+
+  chart('cShare', {
+    type:'bar',
+    data:{ labels: rows.map(r => r.label),
+      datasets:[{ data: rows.map(r => r.share === null ? null : +r.share.toFixed(2)),
+        backgroundColor: C.navy, borderRadius:5 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label: c => ` ${c.parsed.y}% ของยอดทั้งเดือน` } } },
+      scales:{ x:{ grid:{ display:false } }, y:{ beginAtZero:true, grid:{ color:'#EEF2F7' }, ticks:{ callback: v => v + '%' } } } }
+  });
+}
+bootPage('campaign', 'แคมเปญเลขเบิ้ล', { month:false }, renderCampaign);
+</script>
+</body>
+</html>

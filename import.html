@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>นำเข้าข้อมูล · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/parsers.js"></script>
+</head>
+<body>
+<script>
+let PICKED = [];   // [{file, wb, kind, sheets:[ชื่อชีทที่เลือก]}]
+
+function logLine(t){
+  const el = $('#log');
+  if (el){ el.textContent += (el.textContent ? '\n' : '') + t; el.scrollTop = 1e6; }
+}
+function setBar(p){ const b = $('#bar i'); if (b) b.style.width = p.toFixed(1) + '%'; }
+
+async function renderImport(){
+  const hist = await SB.select('lz_imports', 'select=*&order=done_at.desc&limit=60');
+
+  $('#view').innerHTML = `
+    <div class="warn">อัปไฟล์เดือนเดิมซ้ำได้ทุกเมื่อ — ระบบสร้างรหัสประจำแถวจากเนื้อหา
+      แถวเดิมจึงถูกเขียนทับ ไม่บวกยอดซ้ำ</div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>เลือกไฟล์ Excel</h3>
+        <span class="hint">report_YYYY_-_M.xlsx (ยอดขาย) · Lazada_ค่าใช้จ่าย_YYYY.xlsx (ค่าใช้จ่าย)</span></div>
+      <div class="panel-b">
+        <div class="drop" id="drop">
+          <div class="big">ลากไฟล์มาวาง หรือคลิกเพื่อเลือก</div>
+          <div class="sm">เลือกหลายไฟล์พร้อมกันได้ · ระบบเดาชนิดไฟล์และชีทให้อัตโนมัติ</div>
+        </div>
+        <input type="file" id="file" accept=".xlsx,.xls" multiple class="hidden">
+        <div class="filelist" id="flist"></div>
+        <div class="bar" id="bar"><i style="width:0"></i></div>
+        <div style="margin-top:13px;display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn o" id="btnGo" disabled>เริ่มนำเข้าข้อมูล</button>
+          <button class="btn" onclick="PICKED=[];paintList();$('#log').textContent='';">ล้างรายการ</button>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    ${renderTable([
+      { t:'เวลา', k:'done_at', fmt: r => new Date(r.done_at).toLocaleString('th-TH') },
+      { t:'ผู้นำเข้า', k:'by_email' },
+      { t:'ไฟล์', k:'file_name' },
+      { t:'ชนิด', k:'kind', fmt: r => `<span class="chip ${r.kind === 'sales' ? 'lz' : 'b'}">${esc(r.kind === 'sales' ? 'ยอดขาย' : 'ค่าใช้จ่าย')}</span>` },
+      { t:'จำนวนแถว', num:1, raw: r => +r.rows_in, fmt: r => num(r.rows_in) }
+    ], hist, { title:'ประวัติการนำเข้า', sort:0 })}`;
+
+  paintTables();
+
+  $('#drop').onclick = () => $('#file').click();
+  $('#file').onchange = e => addFiles([...e.target.files]);
+  ['dragenter','dragover'].forEach(t => $('#drop').addEventListener(t, e => {
+    e.preventDefault(); $('#drop').classList.add('over'); }));
+  ['dragleave','drop'].forEach(t => $('#drop').addEventListener(t, e => {
+    e.preventDefault(); $('#drop').classList.remove('over'); }));
+  $('#drop').addEventListener('drop', e => addFiles([...e.dataTransfer.files].filter(f => /\.xlsx?$/i.test(f.name))));
+  $('#btnGo').onclick = runImport;
+}
+
+async function addFiles(files){
+  for (const f of files){
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { cellDates:true });
+      const kind = guessKind(wb);
+      PICKED.push({ file:f, wb, kind, sheets: suggestSheets(wb, kind) });
+    } catch (e) { toast(`${f.name}: อ่านไฟล์ไม่ได้`, 'err'); }
+  }
+  paintList();
+}
+function paintList(){
+  const el = $('#flist'); if (!el) return;
+  el.innerHTML = PICKED.map((p, i) => `
+    <div class="fitem">
+      <div class="row1">
+        <span class="nm">${esc(p.file.name)}</span>
+        <select onchange="setKind(${i},this.value)">
+          <option value="sales" ${p.kind==='sales'?'selected':''}>ยอดขาย</option>
+          <option value="expense" ${p.kind==='expense'?'selected':''}>ค่าใช้จ่าย</option>
+        </select>
+        <button class="btn sm" onclick="PICKED.splice(${i},1);paintList()">ลบ</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted)">
+        ชีทที่จะอ่าน: ${p.sheets.length ? p.sheets.map(s => `<span class="chip b">${esc(s)}</span>`).join(' ')
+          : '<span class="chip r">ยังไม่ได้เลือกชีท</span>'}
+        <a style="cursor:pointer;margin-left:6px" onclick="toggleSheets(${i})">เลือกชีทเอง</a></div>
+      <div class="sheetpick hidden" id="sp${i}">
+        ${p.wb.SheetNames.map(s => `<label><input type="checkbox" ${p.sheets.includes(s)?'checked':''}
+          onchange="pickSheet(${i},'${esc(s).replace(/'/g,"\\'")}',this.checked)"> ${esc(s)}</label>`).join('')}
+      </div>
+    </div>`).join('');
+  const b = $('#btnGo'); if (b) b.disabled = !PICKED.length;
+}
+function setKind(i, k){
+  PICKED[i].kind = k;
+  PICKED[i].sheets = suggestSheets(PICKED[i].wb, k);
+  paintList();
+}
+function toggleSheets(i){ $('#sp' + i).classList.toggle('hidden'); }
+function pickSheet(i, name, on){
+  const s = PICKED[i].sheets;
+  if (on){ if (!s.includes(name)) s.push(name); }
+  else { const k = s.indexOf(name); if (k >= 0) s.splice(k, 1); }
+  const open = !$('#sp' + i).classList.contains('hidden');
+  paintList();
+  if (open) $('#sp' + i).classList.remove('hidden');
+}
+
+async function runImport(){
+  const btn = $('#btnGo');
+  btn.disabled = true; btn.textContent = 'กำลังนำเข้า…';
+  $('#log').textContent = '';
+  let done = 0;
+
+  for (const p of PICKED){
+    logLine(`\n📄 ${p.file.name}`);
+    try {
+      if (!p.sheets.length){ logLine('   ⚠️ ไม่มีชีทให้อ่าน — ข้ามไฟล์นี้'); done++; continue; }
+
+      if (p.kind === 'sales'){
+        const r = parseSales(p.wb, p.sheets);
+        r.warn.forEach(w => logLine('   ⚠️ ' + w));
+        if (!r.rows.length){ logLine('   ⚠️ ไม่พบข้อมูลยอดขาย'); done++; continue; }
+        logLine(`   พบยอดขาย ${num(r.rows.length)} บรรทัด · แตกเป็น SKU ${num(r.skus.length)} รายการ`);
+        await SB.upsert('lz_sales', r.rows, (a, b2) => logLine(`   ยอดขาย ${num(a)}/${num(b2)}`));
+        await SB.upsert('lz_sku',   r.skus, (a, b2) => logLine(`   SKU ${num(a)}/${num(b2)}`));
+        await SB.upsert('lz_imports', [{ id: hashKey(p.file.name + Date.now()),
+          by_email: SB.email(), file_name: p.file.name, kind:'sales', rows_in: r.rows.length }]);
+        logLine('   ✅ เสร็จ');
+      } else {
+        const r = parseExpense(p.wb, p.sheets);
+        r.warn.forEach(w => logLine('   ⚠️ ' + w));
+        if (!r.rows.length){ logLine('   ⚠️ ไม่พบข้อมูลค่าใช้จ่าย'); done++; continue; }
+        logLine(`   พบค่าใช้จ่าย ${num(r.rows.length)} รายการ`);
+        await SB.upsert('lz_expense', r.rows, (a, b2) => logLine(`   ค่าใช้จ่าย ${num(a)}/${num(b2)}`));
+        await SB.upsert('lz_imports', [{ id: hashKey(p.file.name + Date.now()),
+          by_email: SB.email(), file_name: p.file.name, kind:'expense', rows_in: r.rows.length }]);
+        logLine('   ✅ เสร็จ');
+      }
+    } catch (e) { logLine('   ❌ ' + (e.message || e)); }
+    done++; setBar(done / PICKED.length * 100);
+  }
+
+  cacheClear();
+  logLine('\n🎉 นำเข้าครบแล้ว — กดรีเฟรชหรือเปิดแท็บอื่นเพื่อดูตัวเลขใหม่');
+  toast('นำเข้าข้อมูลเรียบร้อย', 'ok');
+  PICKED = []; paintList();
+  btn.textContent = 'เริ่มนำเข้าข้อมูล';
+}
+
+(async function(){
+  if (!requireAuth()) return;
+  shell('import', 'นำเข้าข้อมูล', 'อัปโหลดไฟล์ Excel เพื่ออัปเดตข้อมูล');
+  $('#view').innerHTML = loading();
+  try {
+    const ok = await SB.loadMember();
+    if (!ok){ location.href = 'index.html'; return; }
+    await renderImport();
+  } catch (e) { $('#view').innerHTML = errBox(e); }
+})();
+</script>
+</body>
+</html>

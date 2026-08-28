@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ยอดขาย · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<script>
+async function renderSales(){
+  const r = filterRange(), rp = prevYearRange();
+  const [daily, dailyPrev, mon, monPrev] = await Promise.all([
+    SB.rpcCached('f_sales_daily',   rpcArgs(r)),
+    SB.rpcCached('f_sales_daily',   rpcArgs(rp)),
+    SB.rpcCached('f_sales_monthly', rpcArgs(r)),
+    SB.rpcCached('f_sales_monthly', rpcArgs(rp))
+  ]);
+  if (!daily.length){
+    $('#view').innerHTML = emptyState('ไม่มีข้อมูลในช่วงที่เลือก', 'ลองเปลี่ยนปี/เดือน หรืออัปโหลดไฟล์เพิ่ม', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+
+  const sum = a => a.reduce((s, x) => s + (+x.amount || 0), 0);
+  const total = sum(daily), totalPrev = sum(dailyPrev);
+  const orders = daily.reduce((s, x) => s + (+x.orders || 0), 0);
+  const qty    = daily.reduce((s, x) => s + (+x.qty || 0), 0);
+  const best   = [...daily].sort((a,b) => b.amount - a.amount)[0];
+  const perDay = total / daily.length;
+
+  /* จัดกลุ่มรายสัปดาห์ตามวันที่ในเดือน */
+  const wk = {};
+  daily.forEach(d => { const w = Math.ceil(dOf(d.d) / 7); wk[w] = (wk[w] || 0) + (+d.amount || 0); });
+
+  const single = FILTER.month !== 'all';
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi('ยอดขายรวมช่วงที่เลือก', money(total), `${growthChip(growth(total, totalPrev))} เทียบช่วงเดียวกันปีก่อน`, 'o')}
+      ${kpi('ออเดอร์', num(orders), `${num(qty)} ชิ้น`, 'n')}
+      ${kpi('เฉลี่ยต่อวัน', money(perDay), `${daily.length} วันที่มียอด`, 'g')}
+      ${kpi('วันที่ขายดีที่สุด', money(best.amount), thDate(best.d) + (best.is_camp ? ' · วันเลขเบิ้ล' : ''), 'ok')}
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>ยอดขายรายวัน</h3>
+        <span class="hint">แท่งสีทอง = วันเลขเบิ้ล · เส้นเทา = ช่วงเดียวกันปีที่แล้ว</span></div>
+      <div class="panel-b"><div class="chartbox lg"><canvas id="cDay"></canvas></div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-h"><h3>${single ? 'ยอดขายรายสัปดาห์' : 'ยอดขายรายสัปดาห์ของเดือน'}</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cWeek"></canvas></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h3>ยอดขายรายเดือน เทียบปีที่แล้ว</h3></div>
+        <div class="panel-b"><div class="chartbox"><canvas id="cMon"></canvas></div></div>
+      </div>
+    </div>
+
+    ${renderTable([
+      { t:'วันที่', k:'d', fmt: r => thDate(r.d) + (r.is_camp ? ' <span class="chip g">เลขเบิ้ล</span>' : '') },
+      { t:'ยอดขาย', num:1, bar:1, sum:1, raw: r => +r.amount, fmt: r => money(r.amount) },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => +r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'ชิ้น', num:1, sum:1, raw: r => +r.qty, fmt: r => num(r.qty), sumFmt: num },
+      { t:'เฉลี่ย/ออเดอร์', num:1, raw: r => r.orders ? r.amount/r.orders : 0, fmt: r => money(r.orders ? r.amount/r.orders : 0) }
+    ], daily, { title:'รายละเอียดรายวัน', sort:0, dir:'asc', total:true, search:true, download:'ยอดขายรายวัน_Lazada' })}`;
+
+  paintTables();
+
+  const labels = daily.map(d => single ? dOf(d.d) : thDate(d.d));
+  chart('cDay', {
+    type:'bar',
+    data:{ labels, datasets:[
+      { label:'ยอดขาย', data: daily.map(d => +d.amount),
+        backgroundColor: daily.map(d => d.is_camp ? C.gold : C.orange), borderRadius:4 },
+      { label:'ปีที่แล้ว', type:'line', data: daily.map((_, i) => +(dailyPrev[i]?.amount) || null),
+        borderColor:C.grey, borderWidth:2, pointRadius:0, tension:.3 }
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12 } },
+        tooltip:{ callbacks:{ label: c => ` ${c.dataset.label}: ${money(c.parsed.y)}` } } },
+      scales:{ x:{ grid:{ display:false } },
+        y:{ beginAtZero:true, grid:{ color:'#EEF2F7' }, ticks:{ callback: axisTick } } } }
+  });
+
+  chart('cWeek', barCfg(Object.keys(wk).map(w => 'สัปดาห์ ' + w),
+    [{ label:'ยอดขาย', data:Object.values(wk), backgroundColor:C.navy, borderRadius:5 }]));
+
+  const byM = {}; mon.forEach(x => byM[+x.ym.slice(5)] = x);
+  const byP = {}; monPrev.forEach(x => byP[+x.ym.slice(5)] = x);
+  chart('cMon', barCfg(TH_MON_S.slice(1), [
+    { label:'ช่วงที่เลือก', data:Array.from({length:12}, (_,i) => +byM[i+1]?.amount || null), backgroundColor:C.orange, borderRadius:5 },
+    { label:'ปีที่แล้ว',    data:Array.from({length:12}, (_,i) => +byP[i+1]?.amount || null), backgroundColor:C.grey,   borderRadius:5 }
+  ]));
+}
+bootPage('sales', 'ยอดขาย', {}, renderSales);
+</script>
+</body>
+</html>

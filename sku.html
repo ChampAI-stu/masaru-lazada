@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SKU ขายดี · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/common.js"></script>
+</head>
+<body>
+<script>
+let TOPN = 20;
+function setTopN(n){ TOPN = n; onFilterChange(); }
+
+async function renderSku(){
+  const r = filterRange(), rp = prevYearRange();
+  const [byAmt, byQty, prevAmt, ownerSku] = await Promise.all([
+    SB.rpcCached('f_sales_sku', rpcArgs(r)),
+    SB.rpcCached('f_sku_qty',   rpcArgs(r)),
+    SB.rpcCached('f_sales_sku', rpcArgs(rp)),
+    SB.rpcCached('f_sku_owner', rpcArgs(r))
+  ]);
+  if (!byAmt.length){
+    $('#view').innerHTML = emptyState('ไม่มีข้อมูลในช่วงที่เลือก', 'ลองเปลี่ยนปี/เดือน หรืออัปโหลดไฟล์เพิ่ม', 'ไปหน้านำเข้าข้อมูล');
+    return;
+  }
+  const prevMap = {}; prevAmt.forEach(x => prevMap[x.sku] = +x.amount);
+  const top = byAmt.slice(0, TOPN).map((x, i) => ({
+    rank:i+1, sku:x.sku, amount:+x.amount, qty:+x.qty, orders:+x.orders,
+    yoy: growth(+x.amount, prevMap[x.sku])
+  }));
+  const totalAmt = byAmt.reduce((s,x) => s + +x.amount, 0);
+  const topShare = top.reduce((s,x) => s + x.amount, 0) / totalAmt * 100;
+
+  /* Top 10 ต่อคน */
+  const byOwner = {};
+  ownerSku.forEach(x => { (byOwner[x.owner || 'ไม่ระบุ'] = byOwner[x.owner || 'ไม่ระบุ'] || []).push(x); });
+  const ownerRows = [];
+  Object.keys(byOwner).sort((a,b) => a.localeCompare(b,'th')).forEach(o => {
+    byOwner[o].slice(0, 10).forEach((x, i) => ownerRows.push({
+      owner: i === 0 ? o : '', rank:i+1, sku:x.sku, amount:+x.amount, qty:+x.qty }));
+  });
+
+  $('#view').innerHTML = `
+    <div class="kpis">
+      ${kpi('SKU ที่ขายได้', num(byAmt.length) + ' รายการ', 'ในช่วงที่เลือก', 'n')}
+      ${kpi(`Top ${TOPN} คิดเป็น`, topShare.toFixed(1) + '%', 'ของยอดขายทั้งหมด', 'o')}
+      ${kpi('SKU อันดับ 1', esc(top[0].sku), money(top[0].amount), 'g')}
+      ${kpi('ยอดขายรวม', money(totalAmt), num(byQty.reduce((s,x)=>s + +x.qty,0)) + ' ชิ้น', 'ok')}
+    </div>
+
+    <div class="pill-row" style="margin-bottom:14px">
+      ${[10,20,30,50].map(n => `<button class="pill ${TOPN===n?'on':''}" onclick="setTopN(${n})">Top ${n}</button>`).join('')}
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>Top ${TOPN} SKU ตามยอดเงิน</h3></div>
+      <div class="panel-b"><div class="chartbox xl"><canvas id="cTop"></canvas></div></div>
+    </div>
+
+    ${renderTable([
+      { t:'#', k:'rank', fmt: r => `<span class="rank">${r.rank}</span>` },
+      { t:'SKU', k:'sku' },
+      { t:'ยอดเงิน', num:1, bar:1, sum:1, raw: r => r.amount, fmt: r => money(r.amount) },
+      { t:'ชิ้น', num:1, sum:1, raw: r => r.qty, fmt: r => num(r.qty), sumFmt: num },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => r.orders, fmt: r => num(r.orders), sumFmt: num },
+      { t:'% ของยอดรวม', num:1, raw: r => r.amount/totalAmt*100, fmt: r => (r.amount/totalAmt*100).toFixed(2) + '%' },
+      { t:'เทียบปีที่แล้ว', num:1, raw: r => r.yoy ?? -9e9, fmt: r => growthChip(r.yoy) }
+    ], top, { title:`Top ${TOPN} SKU ตามยอดเงิน`, sort:2, search:true, total:true, download:'TopSKU_ยอดเงิน_Lazada' })}
+
+    ${renderTable([
+      { t:'#', k:'rank', fmt: (r, i) => `<span class="rank">${i+1}</span>` },
+      { t:'SKU', k:'sku' },
+      { t:'ชิ้นที่ขายได้', num:1, bar:1, sum:1, raw: r => +r.qty, fmt: r => num(r.qty), sumFmt: num },
+      { t:'ออเดอร์', num:1, sum:1, raw: r => +r.orders, fmt: r => num(r.orders), sumFmt: num }
+    ], byQty.slice(0, TOPN), { title:`Top ${TOPN} SKU ตามจำนวนชิ้น (แตกสินค้าในเซ็ตแล้ว)`,
+        hint:'นับของแถมและสินค้าในเซ็ตแยกเป็นรายการ', sort:2, search:true, total:true, download:'TopSKU_จำนวนชิ้น_Lazada' })}
+
+    ${renderTable([
+      { t:'ผู้ดูแล', k:'owner', fmt: r => r.owner ? `<b>${esc(r.owner)}</b>` : '' },
+      { t:'#', k:'rank', fmt: r => `<span class="rank">${r.rank}</span>` },
+      { t:'SKU', k:'sku' },
+      { t:'ยอดเงิน', num:1, bar:1, raw: r => r.amount, fmt: r => money(r.amount) },
+      { t:'ชิ้น', num:1, raw: r => r.qty, fmt: r => num(r.qty) }
+    ], ownerRows, { title:'Top 10 SKU แยกรายคน', search:true, download:'TopSKU_รายคน_Lazada' })}`;
+
+  paintTables();
+  chart('cTop', hbarCfg(top.map(x => x.sku), top.map(x => x.amount), C.orange));
+}
+bootPage('sku', 'SKU ขายดี', {}, renderSku);
+</script>
+</body>
+</html>

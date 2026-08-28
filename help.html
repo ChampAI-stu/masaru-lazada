@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>วิธีใช้งาน · ทีม Lazada</title>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/common.js"></script>
+<style>
+.doc{max-width:900px}
+.doc h2{font-size:17px;margin:0 0 10px}
+.doc p,.doc li{font-size:13.5px;line-height:1.7}
+.doc ol,.doc ul{margin:0 0 6px 20px;padding:0}
+.doc code{background:#F1F4FA;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px}
+.doc table{margin-top:6px}
+.doc thead th{cursor:default}
+</style>
+</head>
+<body>
+<script>
+if (requireAuth()){
+  shell('help', 'วิธีใช้งาน', 'ขั้นตอนใช้งาน ไฟล์ที่ต้องอัป และวิธีอ่านตัวเลข');
+  $('#filters').innerHTML = '';
+  $('#refreshBtn').classList.add('hidden');
+  $('#view').innerHTML = `
+  <div class="doc">
+    <div class="panel"><div class="panel-h"><h3>เริ่มต้นใช้งาน</h3></div><div class="panel-b">
+      <ol>
+        <li><b>สมัครบัญชี</b> ด้วยอีเมลบริษัท พร้อมใส่รหัสเชิญที่หัวหน้าทีมให้มา</li>
+        <li><b>อัปโหลดข้อมูล</b> ที่แท็บ "นำเข้าข้อมูล" — ลากไฟล์ Excel เข้าไปได้ทีละหลายไฟล์</li>
+        <li><b>ดูรายงาน</b> ที่แท็บต่าง ๆ ด้านบน โดยเลือกปี/เดือน/ผู้ดูแล/ร้าน จากแถบตัวกรอง</li>
+      </ol>
+      <p style="color:var(--muted);margin-top:8px">ตัวกรองที่เลือกไว้จะติดตามไปทุกแท็บ ไม่ต้องเลือกใหม่</p>
+    </div></div>
+
+    <div class="panel"><div class="panel-h"><h3>ไฟล์ที่ต้องอัปโหลด</h3></div><div class="panel-b">
+      <table>
+        <thead><tr><th class="na">ไฟล์</th><th class="na">ชีทที่ระบบอ่าน</th><th class="na">อัปเมื่อไหร่</th></tr></thead>
+        <tbody>
+          <tr><td><code>report_2026_-_9.xlsx</code></td><td>ชีท <code>Data</code></td><td>ทุกต้นเดือน (เดือนที่ผ่านมา)</td></tr>
+          <tr><td><code>Lazada_ค่าใช้จ่าย_2026.xlsx</code></td><td>ชีท ADS / รีวิว Lazada</td><td>เมื่อมีรายการเพิ่ม</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:10px">อัปไฟล์เดิมซ้ำได้ทุกเมื่อ ระบบสร้างรหัสประจำแถวจากเนื้อหา
+        ถ้าเนื้อหาเหมือนเดิมจะเขียนทับแถวเดิม <b>ยอดไม่บวกซ้ำ</b>
+        ถ้าแก้ตัวเลขในไฟล์แล้วอัปใหม่ ระบบจะเพิ่มเป็นแถวใหม่ ให้ล้างข้อมูลเดือนนั้นก่อนหากต้องการแทนที่ทั้งหมด</p>
+    </div></div>
+
+    <div class="panel"><div class="panel-h"><h3>กติกาการนับตัวเลข</h3></div><div class="panel-b">
+      <table>
+        <thead><tr><th class="na">หัวข้อ</th><th class="na">ระบบใช้อะไร</th></tr></thead>
+        <tbody>
+          <tr><td>ยอดขาย</td><td>คอลัมน์ <code>จำนวนเงินจำกัด (ตัดส่วนลด)</code></td></tr>
+          <tr><td>แพลตฟอร์ม</td><td>เฉพาะ <b>Lazada</b> เท่านั้น (TikTok / Shopee ถูกกรองออก)</td></tr>
+          <tr><td>สถานะที่ไม่นับ</td><td>ผิดปกติ · ยกเลิก · คืนสินค้า · คืนเงิน · ตีกลับ</td></tr>
+          <tr><td>วันเลขเบิ้ล</td><td>วันที่ตรงกับเลขเดือน (1.1, 2.2 … 12.12) ระบบติดธงอัตโนมัติ</td></tr>
+          <tr><td>SKU ตามยอดเงิน</td><td>ใช้คอลัมน์ <code>SKU ตัด</code> = สินค้าหลักของออเดอร์</td></tr>
+          <tr><td>SKU ตามจำนวนชิ้น</td><td>แตกเซ็ต <code>A*1/B*2</code> เป็นรายการย่อย นับของแถมด้วย</td></tr>
+          <tr><td>ผู้ดูแล / ร้าน</td><td>คอลัมน์ <code>ผู้ดูแล</code> และ <code>ชื่อ</code></td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <div class="panel"><div class="panel-h"><h3>วิธีอ่านตัวเลขบนหน้าภาพรวม</h3></div><div class="panel-b">
+      <ul>
+        <li><b>ยอดขายเดือน…</b> — ยอดของเดือนที่เลือก พร้อม % เทียบเดือนก่อนหน้า (ขึ้นเขียว ลงแดง)</li>
+        <li><b>ยอดแคมเปญ</b> — เฉพาะยอดที่เกิดในวันเลขเบิ้ลของเดือนนั้น เทียบกับวันเลขเบิ้ลเดือนก่อน</li>
+        <li><b>วงกลมเป้าหมาย</b> — ยอดสะสมทั้งปีเทียบเป้า 150 ล้านบาท ตัวเลขกลางวงคือ % ที่ทำได้แล้ว</li>
+        <li><b>แถบใต้วงกลม</b> — ขีดสีน้ำเงินคือจุดที่ "ควรจะอยู่" ตามจำนวนเดือนที่ผ่านไป
+          ถ้าแถบสีส้มสั้นกว่าขีด แปลว่ายอดยังตามเป้าไม่ทัน</li>
+      </ul>
+    </div></div>
+
+    <div class="panel"><div class="panel-h"><h3>เป้าหมาย</h3></div><div class="panel-b">
+      <p>เป้าปัจจุบัน: ทั้งปี <b>150,000,000 บาท</b> · รายเดือน <b>12,500,000 บาท</b> · แคมเปญเลขเบิ้ล <b>200,000 บาท/ครั้ง</b></p>
+      <p>แก้เป้าได้ที่ตาราง <code>lz_targets</code> ใน Supabase โดยตรง ไม่ต้องแก้โค้ด</p>
+    </div></div>
+
+    <div class="panel"><div class="panel-h"><h3>ปัญหาที่พบบ่อย</h3></div><div class="panel-b">
+      <ul>
+        <li><b>อัปแล้วตัวเลขไม่เปลี่ยน</b> — กดปุ่ม ↻ รีเฟรช มุมขวาบน (ระบบแคชข้อมูลไว้ 10 นาที)</li>
+        <li><b>ขึ้นว่าไม่พบชีท Data</b> — ตรวจว่าชื่อชีทสะกดว่า <code>Data</code> ถ้าต่างจากนี้ให้เปลี่ยนชื่อชีทในไฟล์ก่อน</li>
+        <li><b>ยอดไม่ตรงกับที่ทีมสรุปเอง</b> — เทียบกติกาการนับในตารางด้านบน มักต่างกันที่ "สถานะที่ไม่นับ"</li>
+      </ul>
+    </div></div>
+  </div>`;
+}
+</script>
+</body>
+</html>
