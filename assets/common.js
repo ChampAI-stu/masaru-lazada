@@ -425,10 +425,12 @@ function tblRows(T){
   }
   if (T.sort != null){
     const c = T.cols[T.sort], sgn = T.dir === 'asc' ? 1 : -1;
+    /* sortRaw = ค่าที่ใช้เรียงอย่างเดียว (เช่น "1.1" ต้องเรียงตามเลขเดือน ไม่ใช่ตามตัวอักษร) */
+    const key = c.sortRaw || c.raw;
     rows = [...rows].sort((a, b) => {
-      const va = c.raw ? c.raw(a) : a[c.k], vb = c.raw ? c.raw(b) : b[c.k];
+      const va = key ? key(a) : a[c.k], vb = key ? key(b) : b[c.k];
       if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * sgn;
-      return String(va ?? '').localeCompare(String(vb ?? ''), 'th') * sgn;
+      return String(va ?? '').localeCompare(String(vb ?? ''), 'th', { numeric: true }) * sgn;
     });
   }
   return rows;
