@@ -80,8 +80,8 @@ async function renderCampaign(){
     </div>
 
     ${renderTable([
-      { t:'แคมเปญ', k:'label' },
-      { t:'วันที่', k:'d', fmt: r => thDate(r.d) },
+      { t:'แคมเปญ', k:'label', sortRaw: r => r.m },
+      { t:'วันที่', k:'d', sortRaw: r => r.m, fmt: r => thDate(r.d) },
       { t:`ปี ${beYear(year)}`, num:1, bar:1, sum:1, raw: r => r.amount || 0, fmt: r => r.amount ? money(r.amount) : '—' },
       { t:`ปี ${beYear(year-1)}`, num:1, sum:1, raw: r => r.prev || 0, fmt: r => r.prev ? money(r.prev) : '—' },
       { t:'เทียบปีที่แล้ว', num:1, raw: r => r.yoy ?? -9e9, fmt: r => growthChip(r.yoy) },
